@@ -3,6 +3,7 @@ import numpy as np
 import cv2
 from pathlib import Path
 import os
+from Model import Yolo
 
 def test(pathname):
     imgList = os.listdir(pathname)
