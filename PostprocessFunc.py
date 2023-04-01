@@ -13,7 +13,7 @@ from Model import Yolo
 
 os.chdir('/Users/yiyi/Desktop/DSA5204/Project/Project-main/50_examples')
 
-# some parameters
+# some parameters to be specified
 img_dir = os.path.join(os.getcwd(), "images")
 label_dir = os.path.join(os.getcwd(), "labels")
 
@@ -44,9 +44,9 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 def check_class_accuracy(model, loader, threshold):
     
     """
-    Parameter
-    loader: should be calculated by the function 'get_loader()', which can output
-    training data loader or test data loader
+    Parameter：
+        loader: should be calculated by the function 'get_loader()', which can output
+        training data loader or test data loader
     """
     
     model.eval()
@@ -93,8 +93,8 @@ def get_evaluation_bboxes(loader, model, iou_threshold,
     need functions: cells_to_bboxes() and non_max_suppression()
     make sure model is in eval before get bboxes
     Parameters:
-    loader: loader of test data which should be evaluated
-    box_format: "midpoint" or "corner"
+        loader: loader of test data which should be evaluated
+        box_format: "midpoint" or "corner"
     """
     
     model.eval()
@@ -150,7 +150,9 @@ def mean_average_precision(
     pred_boxes, true_boxes, iou_threshold=0.5, box_format="midpoint", num_classes=20
 ):
     """
-    This function calculates mean average precision (mAP)
+    This function calculates mean average precision (mAP).
+    We may change the iouthreshold(maybe like 0.5,0.55,...,0.95) and store them,
+    then take the average
     Parameters:
         pred_boxes (list): list of lists containing all bboxes with each bboxes
         specified as [train_idx, class_prediction, prob_score, x1, y1, x2, y2]
