@@ -8,10 +8,16 @@ from pathlib import Path
 from tqdm import tqdm 
 from Dataset import YOLODataset
 from Model import Yolo
+from collections import Counter
+from Util import (
+    intersection_over_union,
+    non_max_suppression,
+    cells_to_bboxes
+)
 
 
 
-os.chdir('/Users/yiyi/Desktop/DSA5204/Project/Project-main/50_examples')
+os.chdir('./50_examples')
 
 # some parameters to be specified
 img_dir = os.path.join(os.getcwd(), "images")
