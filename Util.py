@@ -1,7 +1,77 @@
 from matplotlib import pyplot as plt
 import torch
+from torch.utils.data import DataLoader
 import cv2
 import numpy as np
+
+
+DATASET = 'PASCAL_VOC'
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+# seed_everything()  # If you want deterministic behavior
+NUM_WORKERS = 4
+BATCH_SIZE = 32
+IMAGE_SIZE = 416
+NUM_CLASSES = 20
+LEARNING_RATE = 1e-5
+WEIGHT_DECAY = 1e-4
+NUM_EPOCHS = 100
+CONF_THRESHOLD = 0.05
+MAP_IOU_THRESH = 0.5
+NMS_IOU_THRESH = 0.45
+S = [IMAGE_SIZE // 32, IMAGE_SIZE // 16, IMAGE_SIZE // 8]
+PIN_MEMORY = True
+LOAD_MODEL = True
+SAVE_MODEL = True
+CHECKPOINT_FILE = "checkpoint.pth.tar"
+IMG_DIR = DATASET + "/images/"
+LABEL_DIR = DATASET + "/labels/"
+ANCHORS = [
+    [(0.28, 0.22), (0.38, 0.48), (0.9, 0.78)],
+    [(0.07, 0.15), (0.15, 0.11), (0.14, 0.29)],
+    [(0.02, 0.03), (0.04, 0.07), (0.08, 0.06)],
+] 
+train_transforms = A.Compose(
+    [
+        A.LongestMaxSize(max_size=int(IMAGE_SIZE * scale)),
+        A.PadIfNeeded(
+            min_height=int(IMAGE_SIZE * scale),
+            min_width=int(IMAGE_SIZE * scale),
+            border_mode=cv2.BORDER_CONSTANT,
+        ),
+        A.RandomCrop(width=IMAGE_SIZE, height=IMAGE_SIZE),
+        A.ColorJitter(brightness=0.6, contrast=0.6, saturation=0.6, hue=0.6, p=0.4),
+        A.OneOf(
+            [
+                A.ShiftScaleRotate(
+                    rotate_limit=20, p=0.5, border_mode=cv2.BORDER_CONSTANT
+                ),
+                A.IAAAffine(shear=15, p=0.5, mode="constant"),
+            ],
+            p=1.0,
+        ),
+        A.HorizontalFlip(p=0.5),
+        A.Blur(p=0.1),
+        A.CLAHE(p=0.1),
+        A.Posterize(p=0.1),
+        A.ToGray(p=0.1),
+        A.ChannelShuffle(p=0.05),
+        A.Normalize(mean=[0, 0, 0], std=[1, 1, 1], max_pixel_value=255,),
+        ToTensorV2(),
+    ],
+    bbox_params=A.BboxParams(format="yolo", min_visibility=0.4, label_fields=[],),
+)
+
+test_transforms = A.Compose(
+    [
+        A.LongestMaxSize(max_size=IMAGE_SIZE),
+        A.PadIfNeeded(
+            min_height=IMAGE_SIZE, min_width=IMAGE_SIZE, border_mode=cv2.BORDER_CONSTANT
+        ),
+        A.Normalize(mean=[0, 0, 0], std=[1, 1, 1], max_pixel_value=255,),
+        ToTensorV2(),
+    ],
+    bbox_params=A.BboxParams(format="yolo", min_visibility=0.4, label_fields=[]),
+)
 
 def anchor_iou (box_pred, box_anchor):
     w_1 = box_pred[..., 0:1]
@@ -22,12 +92,10 @@ def anchor_iou (box_pred, box_anchor):
 def draw_boxes(image, boxes, class_labels):
     """
     Draws bounding boxes on an image given the predicted boxes and class labels.
-
     Arguments:
     image -- NumPy array of shape (H, W, C) representing the input image.
     boxes -- NumPy array of shape (N, 4) representing the predicted bounding boxes in the format (x, y, w, h).
     class_labels -- NumPy array of shape (N,) representing the predicted class labels.
-
     Returns:
     output_image -- NumPy array of shape (H, W, C) representing the input image with bounding boxes drawn.
     """
@@ -50,12 +118,10 @@ def draw_boxes(image, boxes, class_labels):
 def visualize_output(image, targets, anchors):
     """
     Visualizes the predicted bounding boxes and class labels on the input image.
-
     Arguments:
     image -- NumPy array of shape (H, W, C) representing the input image.
     targets -- Tuple of PyTorch tensors representing the target outputs from the YOLO model.
     anchors -- List of anchor boxes used by the YOLO model.
-
     Returns:
     None
     """
@@ -92,126 +158,78 @@ def visualize_output(image, targets, anchors):
     plt.axis('off')
     plt.show()
 
-def non_max_suppression(bboxes, iou_threshold, threshold, box_format="corners"):
-    """
-    Video explanation of this function:
-    https://youtu.be/YDkjWEN8jNA
-    Does Non Max Suppression given bboxes
-    Parameters:
-        bboxes (list): list of lists containing all bboxes with each bboxes
-        specified as [class_pred, prob_score, x1, y1, x2, y2]
-        iou_threshold (float): threshold where predicted bboxes is correct
-        threshold (float): threshold to remove predicted bboxes (independent of IoU)
-        box_format (str): "midpoint" or "corners" used to specify bboxes
-    Returns:
-        list: bboxes after performing NMS given a specific IoU threshold
-    """
 
-    assert type(bboxes) == list
+def save_checkpoint(model, optimizer, filename="my_checkpoint.pth.tar"):
+    print("=> Saving checkpoint")
+    checkpoint = {
+        "state_dict": model.state_dict(),
+        "optimizer": optimizer.state_dict(),
+    }
+    torch.save(checkpoint, filename)
 
-    bboxes = [box for box in bboxes if box[1] > threshold]
-    bboxes = sorted(bboxes, key=lambda x: x[1], reverse=True)
-    bboxes_after_nms = []
+def load_checkpoint(checkpoint_file, model, optimizer, lr):
+    print("=> Loading checkpoint")
+    checkpoint = torch.load(checkpoint_file, map_location=DEVICE)
+    model.load_state_dict(checkpoint["state_dict"])
+    optimizer.load_state_dict(checkpoint["optimizer"])
 
-    while bboxes:
-        chosen_box = bboxes.pop(0)
+    # If we don't do this then it will just have learning rate of old checkpoint
+    # and it will lead to many hours of debugging \:
+    for param_group in optimizer.param_groups:
+        param_group["lr"] = lr
 
-        bboxes = [
-            box
-            for box in bboxes
-            if box[0] != chosen_box[0]
-            or intersection_over_union(
-                torch.tensor(chosen_box[2:]),
-                torch.tensor(box[2:]),
-                box_format=box_format,
-            )
-            < iou_threshold
-        ]
+def get_loaders(train_csv_path, test_csv_path):
+    from dataset import YOLODataset
 
-        bboxes_after_nms.append(chosen_box)
-
-    return bboxes_after_nms
-
-def intersection_over_union(boxes_preds, boxes_labels, box_format="midpoint"):
-    """
-    Video explanation of this function:
-    https://youtu.be/XXYG5ZWtjj0
-    This function calculates intersection over union (iou) given pred boxes
-    and target boxes.
-    Parameters:
-        boxes_preds (tensor): Predictions of Bounding Boxes (BATCH_SIZE, 4)
-        boxes_labels (tensor): Correct labels of Bounding Boxes (BATCH_SIZE, 4)
-        box_format (str): midpoint/corners, if boxes (x,y,w,h) or (x1,y1,x2,y2)
-    Returns:
-        tensor: Intersection over union for all examples
-    """
-
-    if box_format == "midpoint":
-        box1_x1 = boxes_preds[..., 0:1] - boxes_preds[..., 2:3] / 2
-        box1_y1 = boxes_preds[..., 1:2] - boxes_preds[..., 3:4] / 2
-        box1_x2 = boxes_preds[..., 0:1] + boxes_preds[..., 2:3] / 2
-        box1_y2 = boxes_preds[..., 1:2] + boxes_preds[..., 3:4] / 2
-        box2_x1 = boxes_labels[..., 0:1] - boxes_labels[..., 2:3] / 2
-        box2_y1 = boxes_labels[..., 1:2] - boxes_labels[..., 3:4] / 2
-        box2_x2 = boxes_labels[..., 0:1] + boxes_labels[..., 2:3] / 2
-        box2_y2 = boxes_labels[..., 1:2] + boxes_labels[..., 3:4] / 2
-
-    if box_format == "corners":
-        box1_x1 = boxes_preds[..., 0:1]
-        box1_y1 = boxes_preds[..., 1:2]
-        box1_x2 = boxes_preds[..., 2:3]
-        box1_y2 = boxes_preds[..., 3:4]
-        box2_x1 = boxes_labels[..., 0:1]
-        box2_y1 = boxes_labels[..., 1:2]
-        box2_x2 = boxes_labels[..., 2:3]
-        box2_y2 = boxes_labels[..., 3:4]
-
-    x1 = torch.max(box1_x1, box2_x1)
-    y1 = torch.max(box1_y1, box2_y1)
-    x2 = torch.min(box1_x2, box2_x2)
-    y2 = torch.min(box1_y2, box2_y2)
-
-    intersection = (x2 - x1).clamp(0) * (y2 - y1).clamp(0)
-    box1_area = abs((box1_x2 - box1_x1) * (box1_y2 - box1_y1))
-    box2_area = abs((box2_x2 - box2_x1) * (box2_y2 - box2_y1))
-
-    return intersection / (box1_area + box2_area - intersection + 1e-6)
-
-def cells_to_bboxes(predictions, anchors, S, is_preds=True):
-    """
-    Scales the predictions coming from the model to
-    be relative to the entire image such that they for example later
-    can be plotted or.
-    INPUT:
-    predictions: tensor of size (N, 3, S, S, num_classes+5)
-    anchors: the anchors used for the predictions
-    S: the number of cells the image is divided in on the width (and height)
-    is_preds: whether the input is predictions or the true bounding boxes
-    OUTPUT:
-    converted_bboxes: the converted boxes of sizes (N, num_anchors, S, S, 1+5) with class index,
-                      object score, bounding box coordinates
-    """
-    BATCH_SIZE = predictions.shape[0]
-    num_anchors = len(anchors)
-    box_predictions = predictions[..., 1:5]
-    if is_preds:
-        anchors = anchors.reshape(1, len(anchors), 1, 1, 2)
-        box_predictions[..., 0:2] = torch.sigmoid(box_predictions[..., 0:2])
-        box_predictions[..., 2:] = torch.exp(box_predictions[..., 2:]) * anchors
-        scores = torch.sigmoid(predictions[..., 0:1])
-        best_class = torch.argmax(predictions[..., 5:], dim=-1).unsqueeze(-1)
-    else:
-        scores = predictions[..., 0:1]
-        best_class = predictions[..., 5:6]
-
-    cell_indices = (
-        torch.arange(S)
-        .repeat(predictions.shape[0], 3, S, 1)
-        .unsqueeze(-1)
-        .to(predictions.device)
+    IMAGE_SIZE = IMAGE_SIZE
+    train_dataset = YOLODataset(
+        train_csv_path,
+        transform=train_transforms,
+        S=[IMAGE_SIZE // 32, IMAGE_SIZE // 16, IMAGE_SIZE // 8],
+        img_dir=IMG_DIR,
+        label_dir=LABEL_DIR,
+        anchors=ANCHORS,
     )
-    x = 1 / S * (box_predictions[..., 0:1] + cell_indices)
-    y = 1 / S * (box_predictions[..., 1:2] + cell_indices.permute(0, 1, 3, 2, 4))
-    w_h = 1 / S * box_predictions[..., 2:4]
-    converted_bboxes = torch.cat((best_class, scores, x, y, w_h), dim=-1).reshape(BATCH_SIZE, num_anchors * S * S, 6)
-    return converted_bboxes.tolist()
+    test_dataset = YOLODataset(
+        test_csv_path,
+        transform=test_transforms,
+        S=[IMAGE_SIZE // 32, IMAGE_SIZE // 16, IMAGE_SIZE // 8],
+        img_dir=IMG_DIR,
+        label_dir=LABEL_DIR,
+        anchors=ANCHORS,
+    )
+    train_loader = DataLoader(
+        dataset=train_dataset,
+        batch_size=BATCH_SIZE,
+        num_workers=NUM_WORKERS,
+        pin_memory=PIN_MEMORY,
+        shuffle=True,
+        drop_last=False,
+    )
+    test_loader = DataLoader(
+        dataset=test_dataset,
+        batch_size=BATCH_SIZE,
+        num_workers=NUM_WORKERS,
+        pin_memory=PIN_MEMORY,
+        shuffle=False,
+        drop_last=False,
+    )
+
+    train_eval_dataset = YOLODataset(
+        train_csv_path,
+        transform=test_transforms,
+        S=[IMAGE_SIZE // 32, IMAGE_SIZE // 16, IMAGE_SIZE // 8],
+        img_dir=IMG_DIR,
+        label_dir=LABEL_DIR,
+        anchors=ANCHORS,
+    )
+    train_eval_loader = DataLoader(
+        dataset=train_eval_dataset,
+        batch_size=BATCH_SIZE,
+        num_workers=NUM_WORKERS,
+        pin_memory=PIN_MEMORY,
+        shuffle=False,
+        drop_last=False,
+    )
+
+    return train_loader, test_loader, train_eval_loader
