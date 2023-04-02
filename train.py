@@ -4,6 +4,8 @@ Main file for training Yolo model on Pascal VOC and COCO dataset
 
 import torch
 import torch.optim as optim
+import os
+import pandas as pd
 
 from Model import Yolo
 from tqdm import tqdm
@@ -15,9 +17,7 @@ from PostprocessFunc import (
     get_evaluation_bboxes,
     check_class_accuracy,
 )
-from DataLoading import (
-    save_checkpoint,
-    load_checkpoint,
+from Dataloading import (
     get_loaders
 )
 from loss import YoloLoss
@@ -27,7 +27,7 @@ warnings.filterwarnings("ignore")
 torch.backends.cudnn.benchmark = True
 
 
-DATASET = 'PASCAL_VOC'
+DATASET = '/Users/zhangjianan/Desktop/Project/Pascal_VOC_2012'
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 # seed_everything()  # If you want deterministic behavior
 NUM_WORKERS = 4
@@ -36,7 +36,7 @@ IMAGE_SIZE = 416
 NUM_CLASSES = 20
 LEARNING_RATE = 1e-5
 WEIGHT_DECAY = 1e-4
-NUM_EPOCHS = 100
+NUM_EPOCHS = 2
 CONF_THRESHOLD = 0.05
 MAP_IOU_THRESH = 0.5
 NMS_IOU_THRESH = 0.45
@@ -93,13 +93,8 @@ def main():
     scaler = torch.cuda.amp.GradScaler()
 
     train_loader, test_loader, train_eval_loader = get_loaders(
-        train_csv_path=DATASET + "/train.csv", test_csv_path=DATASET + "/test.csv"
+        train_csv_path=DATASET + "/train/annotation.csv" , test_csv_path=DATASET + "/valid/annotation.csv"
     )
-
-    if LOAD_MODEL:
-        load_checkpoint(
-            CHECKPOINT_FILE, model, optimizer, LEARNING_RATE
-        )
 
     scaled_anchors = (
         torch.tensor(ANCHORS)
@@ -110,13 +105,13 @@ def main():
         #plot_couple_examples(model, test_loader, 0.6, 0.5, scaled_anchors)
         train_fn(train_loader, model, optimizer, loss_fn, scaler, scaled_anchors)
 
-        #if config.SAVE_MODEL:
-        #    save_checkpoint(model, optimizer, filename=f"checkpoint.pth.tar")
 
-        #print(f"Currently epoch {epoch}")
-        #print("On Train Eval loader:")
-        #print("On Train loader:")
-        #check_class_accuracy(model, train_loader, threshold=config.CONF_THRESHOLD)
+        print(f"Currently epoch {epoch}")
+        model.train()
+        print("On Train loader:")
+        model.eval()
+        print("On  Eval loader:")
+        check_class_accuracy(model, train_loader, threshold=CONF_THRESHOLD)
 
         if epoch > 0 and epoch % 3 == 0:
             check_class_accuracy(model, test_loader, threshold=CONF_THRESHOLD)

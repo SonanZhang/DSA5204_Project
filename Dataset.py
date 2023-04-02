@@ -4,7 +4,7 @@ import pandas as pd
 import torch
 from PIL import Image, ImageFile
 from torch.utils.data import Dataset, DataLoader
-from Util import anchor_iou
+from Util import iou_width_height
 
 
 class YOLODataset(Dataset):
@@ -50,7 +50,7 @@ class YOLODataset(Dataset):
         # Below assumes 3 scale predictions (as paper) and same num of anchors per scale
         targets = [torch.zeros((self.num_anchors // 3, S, S, 6)) for S in self.S]
         for box in bboxes:
-            iou_anchors = anchor_iou(torch.tensor(box[2:4]), self.anchors)
+            iou_anchors = iou_width_height(torch.tensor(box[2:4]), self.anchors)
             anchor_indices = iou_anchors.argsort(descending=True, dim=0)
             x, y, width, height, class_label = box
             has_anchor = [False] * 3  # each scale should have one anchor
