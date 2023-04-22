@@ -1,10 +1,10 @@
 """
 Main file for training Yolo model on Pascal VOC and COCO dataset
 """
-
 import torch
 import torch.optim as optim
 import os
+os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
 import pandas as pd
 
 from Model import Yolo
@@ -27,7 +27,7 @@ warnings.filterwarnings("ignore")
 torch.backends.cudnn.benchmark = True
 
 
-DATASET = '/Users/zhangjianan/Desktop/Project/Pascal_VOC_2012'
+DATASET = './Pascal_VOC_2012'
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 # seed_everything()  # If you want deterministic behavior
 NUM_WORKERS = 4
@@ -36,8 +36,8 @@ IMAGE_SIZE = 416
 NUM_CLASSES = 20
 LEARNING_RATE = 1e-5
 WEIGHT_DECAY = 1e-4
-NUM_EPOCHS = 2
-CONF_THRESHOLD = 0.05
+NUM_EPOCHS = 50
+CONF_THRESHOLD = 0.2
 MAP_IOU_THRESH = 0.5
 NMS_IOU_THRESH = 0.45
 S = [IMAGE_SIZE // 32, IMAGE_SIZE // 16, IMAGE_SIZE // 8]
@@ -66,6 +66,8 @@ def train_fn(train_loader, model, optimizer, loss_fn, scaler, scaled_anchors):
 
         with torch.cuda.amp.autocast():
             out = model(x)
+            img = x[0].permute(1, 2, 0)
+            visualize_output(img, [out[0][0], out[1][0], out[2][0]], ANCHORS)
             loss = (
                 loss_fn(out[0], y0, scaled_anchors[0])
                 + loss_fn(out[1], y1, scaled_anchors[1])
@@ -83,9 +85,10 @@ def train_fn(train_loader, model, optimizer, loss_fn, scaler, scaled_anchors):
         loop.set_postfix(loss=mean_loss)
 
 
-
 def main():
     model = Yolo(num_classes=NUM_CLASSES).to(DEVICE)
+    model.load_pretrained_weights('pytorch_darknet53.pth')  # load weights
+
     optimizer = optim.Adam(
         model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY
     )
@@ -103,18 +106,20 @@ def main():
 
     for epoch in range(NUM_EPOCHS):
         #plot_couple_examples(model, test_loader, 0.6, 0.5, scaled_anchors)
-        train_fn(train_loader, model, optimizer, loss_fn, scaler, scaled_anchors)
-
-
         print(f"Currently epoch {epoch}")
         model.train()
-        print("On Train loader:")
+        train_fn(train_loader, model, optimizer, loss_fn, scaler, scaled_anchors)
+
+        # model.train()
+        # print("On Train loader:")
+        # model.eval()
+        # print("On  Eval loader:")
+        # check_class_accuracy(model, train_loader, threshold=CONF_THRESHOLD)
         model.eval()
-        print("On  Eval loader:")
-        check_class_accuracy(model, train_loader, threshold=CONF_THRESHOLD)
+        check_class_accuracy(model, test_loader, threshold=CONF_THRESHOLD)
 
         if epoch > 0 and epoch % 3 == 0:
-            check_class_accuracy(model, test_loader, threshold=CONF_THRESHOLD)
+            # check_class_accuracy(model, test_loader, threshold=CONF_THRESHOLD)
             pred_boxes, true_boxes = get_evaluation_bboxes(
                 test_loader,
                 model,
